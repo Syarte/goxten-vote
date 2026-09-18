@@ -143,12 +143,16 @@ function normalize(text) {
   return (text || '').trim().toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ');
 }
 
+/* Ключ ФИО, не зависящий от порядка полей: неважно, в «Имя» или «Фамилию»
+   попало каждое слово — панель ЦИК откроется в любом случае. */
+function nameKey(parts) {
+  return parts.map(normalize).filter(Boolean).sort().join('|');
+}
+
 function isAdmin(data) {
-  return ADMIN_NAMES.some((a) =>
-    normalize(a.lastName) === normalize(data.lastName) &&
-    normalize(a.firstName) === normalize(data.firstName) &&
-    normalize(a.middleName) === normalize(data.middleName)
-  );
+  const key = nameKey([data.lastName, data.firstName, data.middleName]);
+  if (!key) return false;
+  return ADMIN_NAMES.some((a) => nameKey([a.lastName, a.firstName, a.middleName]) === key);
 }
 
 function hexToInt(hex) {
