@@ -12,11 +12,18 @@
    Если вебхук начнут спамить — удалите его в настройках канала и создайте новый. */
 const WEBHOOK_URL = 'https://discord.com/api/webhooks/1550500580730863718/SMdcPIK2qQVua3Q1ecjHyoIC6CO93oVJIihjFkZcZeM7HfxjyrQlVJD8add73q24pEBF';
 
-/* Начало голосования. null — открыто сразу. Иначе ISO-дата: '2026-09-20T12:00:00+03:00' */
-const VOTING_START = null;
-
-/* Окончание голосования: 23 сентября 2026, 23:59 по Москве. */
+/* Окончание голосования: 23 сентября 2026, 23:59 по Москве.
+   После этого момента участки закрываются сами, что бы ни стояло в выключателе. */
 const VOTING_DEADLINE = '2026-09-23T23:59:00+03:00';
+
+/* Статус голосования хранится в имени самого вебхука: к нему дописывается
+   [OPEN] или [CLOSED]. Панель ЦИК переключает метку, страницы читают её при
+   загрузке. На подпись сообщений в канале это не влияет. */
+const WEBHOOK_BASE_NAME = 'ЦИК Goxten';
+
+/* Что делать, если статус прочитать не удалось (нет сети, Discord недоступен):
+   'closed' — не принимать голоса, 'open' — принимать. */
+const FALLBACK_STATE = 'closed';
 
 /* ФИО председателя ЦИК. Если ввести его в бюллетень — вместо голоса
    откроется панель управления и в Discord уйдёт запрос «начинать голосование?».
@@ -34,7 +41,6 @@ const PASSPORT_MIN = 5;
 /* Ключи локального хранилища. Меняйте при новых выборах, чтобы сбросить блокировки. */
 const STORAGE_VOTE = 'goxten-election-2026:vote';
 const STORAGE_USED = 'goxten-election-2026:used-passports';
-const STORAGE_STARTED = 'goxten-election-2026:started';
 
 /* Партии. Порядок = номера в бюллетене.
    name      — полное название
@@ -224,10 +230,10 @@ function adminRequestMessage(name) {
 
 function adminDecisionMessage(started, name) {
   return baseMessage({
-    title: started ? 'Голосование открыто' : 'Старт отклонён',
+    title: started ? 'Голосование открыто' : 'Голосование остановлено',
     description: started
-      ? 'Участки открыты. Голоса будут приходить в этот канал до ' + formatDateTime(VOTING_DEADLINE) + '.'
-      : 'Председатель отклонил запуск голосования.',
+      ? 'Участки открыты для всех игроков. Голоса будут приходить в этот канал до ' + formatDateTime(VOTING_DEADLINE) + '.'
+      : 'Приём бюллетеней остановлен. Форма на сайте закрыта для всех.',
     color: started ? 0x2C6E53 : 0xA82318,
     fields: [{ name: 'Решение принял', value: name }],
     footer: { text: 'Выборы мэра Goxten — 2026' },
@@ -361,58 +367,111 @@ function renderParties() {
 }
 
 
-/* ------------------------- сроки ------------------------- */
+/* ------------------------- выключатель голосования ------------------------- */
 
-let scheduleState = 'open';
+/* remoteState: 'open' | 'closed' | 'unset' | null (прочитать не удалось) */
+let remoteState = null;
+let votingState = 'before';
 
-function adminStarted() {
-  return store.get(STORAGE_STARTED) === true;
+function cleanBaseName() {
+  return String(WEBHOOK_BASE_NAME || 'ЦИК Goxten').replace(/\s*\[(OPEN|CLOSED)\]\s*$/i, '').trim();
+}
+
+/* Читаем метку из имени вебхука. */
+async function readSwitch() {
+  if (!WEBHOOK_URL) return null;
+  try {
+    const res = await fetch(WEBHOOK_URL, { method: 'GET' });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const name = data && data.name ? String(data.name) : '';
+    if (/\[OPEN\]/i.test(name)) return 'open';
+    if (/\[CLOSED\]/i.test(name)) return 'closed';
+    return 'unset';
+  } catch (e) {
+    return null;
+  }
+}
+
+/* Переставляем метку — это и есть открытие или остановка голосования. */
+async function writeSwitch(open) {
+  if (!WEBHOOK_URL) return false;
+  try {
+    const res = await fetch(WEBHOOK_URL, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: cleanBaseName() + ' [' + (open ? 'OPEN' : 'CLOSED') + ']' })
+    });
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function refreshSwitch() {
+  remoteState = await readSwitch();
+  applyState();
 }
 
 function computeState() {
-  const now = Date.now();
   const end = new Date(VOTING_DEADLINE).getTime();
-  const start = VOTING_START ? new Date(VOTING_START).getTime() : null;
-
-  if (!isNaN(end) && now >= end) return 'after';
-  if (start && !isNaN(start) && now < start && !adminStarted()) return 'before';
-  return 'open';
+  if (!isNaN(end) && Date.now() >= end) return 'after';
+  if (remoteState === null) return FALLBACK_STATE === 'open' ? 'open' : 'unreachable';
+  if (remoteState === 'open') return 'open';
+  if (remoteState === 'closed') return 'stopped';
+  return 'before';
 }
 
-function applySchedule() {
-  scheduleState = computeState();
+const STATE_TEXT = {
+  after: {
+    status: 'Голосование завершено',
+    count: 'участки закрыты',
+    notice: () => 'Голосование завершено ' + formatDateTime(VOTING_DEADLINE) + '. Бюллетени больше не принимаются.'
+  },
+  before: {
+    status: 'Голосование не началось',
+    count: 'ожидает старта',
+    notice: () => 'Председатель ЦИК ещё не открыл участки. Голосование начнётся по его команде.'
+  },
+  stopped: {
+    status: 'Голосование остановлено',
+    count: 'участки закрыты',
+    notice: () => 'Председатель ЦИК остановил голосование. Бюллетени временно не принимаются.'
+  },
+  unreachable: {
+    status: 'Статус неизвестен',
+    count: 'нет связи с ЦИК',
+    notice: () => 'Не удалось узнать, открыто ли голосование. Обновите страницу или попробуйте позже.'
+  }
+};
+
+function applyState() {
+  votingState = computeState();
 
   const stateEl = $('#status-state');
   const countEl = $('#status-countdown');
   const notice = $('#ballot-notice');
   const btn = $('#submit-btn');
-  const end = new Date(VOTING_DEADLINE);
 
-  stateEl.classList.toggle('is-closed', scheduleState !== 'open');
+  stateEl.classList.toggle('is-closed', votingState !== 'open');
 
-  if (scheduleState === 'after') {
-    stateEl.textContent = 'Голосование завершено';
-    countEl.textContent = 'участки закрыты';
-    notice.textContent = 'Голосование завершено ' + formatDateTime(VOTING_DEADLINE) + '. Бюллетени больше не принимаются.';
+  /* Кнопку не блокируем: через неё председатель ЦИК попадает в панель,
+     даже когда участки закрыты. Голос при этом всё равно не примется. */
+  if (btn) btn.classList.toggle('is-locked', votingState !== 'open');
+
+  if (votingState !== 'open') {
+    const t = STATE_TEXT[votingState];
+    stateEl.textContent = t.status;
+    countEl.textContent = t.count;
+    notice.textContent = t.notice();
     notice.hidden = false;
-    if (btn) { btn.disabled = true; btn.textContent = 'Голосование завершено'; }
-    return;
-  }
-
-  if (scheduleState === 'before') {
-    stateEl.textContent = 'Голосование не началось';
-    countEl.textContent = 'до старта: ' + formatDateTime(VOTING_START);
-    notice.textContent = 'Участки ещё не открыты. Голосование начнётся ' + formatDateTime(VOTING_START) + '.';
-    notice.hidden = false;
-    if (btn) { btn.disabled = true; btn.textContent = 'Участки закрыты'; }
     return;
   }
 
   stateEl.textContent = 'Голосование открыто';
   notice.hidden = true;
-  if (btn) { btn.disabled = false; btn.textContent = 'Проголосовать'; }
 
-  const left = end.getTime() - Date.now();
+  const left = new Date(VOTING_DEADLINE).getTime() - Date.now();
   if (isNaN(left)) { countEl.textContent = 'дата уточняется'; return; }
 
   const days = Math.floor(left / 86400000);
@@ -422,12 +481,6 @@ function applySchedule() {
   countEl.textContent = days > 0
     ? days + ' ' + plural(days, 'день', 'дня', 'дней') + ' ' + hours + ' ч'
     : hours + ' ч ' + mins + ' мин';
-}
-
-function renderDeadline() {
-  $('#deadline-text').textContent = formatDateTime(VOTING_DEADLINE);
-  applySchedule();
-  setInterval(applySchedule, 30000);
 }
 
 
@@ -542,13 +595,18 @@ function renderAdminPanel(name) {
 
   const text = document.createElement('p');
   text.className = 'admin-panel__text';
-  text.textContent = 'Запрос отправлен в Discord-канал ЦИК. Решение принимается здесь: после «Да» в канал уйдёт объявление об открытии участков, и каждый поданный голос будет приходить туда же.';
+  text.textContent = 'Запрос отправлен в Discord-канал ЦИК. Решение принимается здесь и действует для всех игроков: «Да» открывает участки, «Нет» закрывает. Каждый поданный голос приходит в тот же канал.';
 
   const state = document.createElement('p');
   state.className = 'admin-panel__state';
-  state.textContent = adminStarted()
-    ? 'Сейчас: голосование объявлено открытым.'
-    : 'Сейчас: старт не объявлен.';
+
+  const stateLabel = () => {
+    if (remoteState === 'open') return 'Сейчас: голосование открыто.';
+    if (remoteState === 'closed') return 'Сейчас: голосование остановлено.';
+    if (remoteState === 'unset') return 'Сейчас: голосование ещё не открывалось.';
+    return 'Сейчас: статус получить не удалось.';
+  };
+  state.textContent = stateLabel();
 
   const actions = document.createElement('div');
   actions.className = 'admin-panel__actions';
@@ -561,7 +619,7 @@ function renderAdminPanel(name) {
   const no = document.createElement('button');
   no.type = 'button';
   no.className = 'btn btn--ghost';
-  no.textContent = 'Нет';
+  no.textContent = 'Нет, остановить';
 
   const back = document.createElement('button');
   back.type = 'button';
@@ -582,18 +640,27 @@ function renderAdminPanel(name) {
     yes.disabled = true;
     no.disabled = true;
     result.hidden = false;
-    result.textContent = 'Отправляем решение…';
+    result.classList.remove('is-ok');
+    result.textContent = 'Переключаем…';
 
-    const ok = await sendToWebhook(adminDecisionMessage(started, name));
-    store.set(STORAGE_STARTED, started);
-    applySchedule();
+    const switched = await writeSwitch(started);
+    await sendToWebhook(adminDecisionMessage(started, name));
+    await refreshSwitch();
 
-    result.classList.toggle('is-ok', started);
-    result.textContent = (started ? 'Голосование объявлено открытым. ' : 'Старт отклонён. ') +
-      (ok ? 'Сообщение ушло в Discord.' : 'Discord не ответил — проверьте вебхук.');
-    state.textContent = started
-      ? 'Сейчас: голосование объявлено открытым.'
-      : 'Сейчас: старт не объявлен.';
+    state.textContent = stateLabel();
+    result.classList.toggle('is-ok', switched && started);
+
+    if (!switched) {
+      result.textContent = 'Не удалось переключить статус — Discord не принял запрос. ' +
+        'Проверьте вебхук: возможно, он удалён или у него нет прав на изменение.';
+    } else {
+      result.textContent = started
+        ? 'Голосование открыто. Форма теперь доступна всем игрокам.'
+        : 'Голосование остановлено. Форма закрыта для всех игроков.';
+    }
+
+    yes.disabled = false;
+    no.disabled = false;
   };
 
   yes.addEventListener('click', () => decide(true));
@@ -674,9 +741,14 @@ function renderReceipt(record, options) {
 
 /* ------------------------- запуск ------------------------- */
 
-function init() {
+async function init() {
   renderParties();
-  renderDeadline();
+
+  $('#deadline-text').textContent = formatDateTime(VOTING_DEADLINE);
+  applyState();
+  await refreshSwitch();
+  setInterval(applyState, 30000);
+  setInterval(refreshSwitch, 45000);
 
   const form = $('#vote-form');
   const submitBtn = $('#submit-btn');
@@ -730,10 +802,8 @@ function init() {
       return;
     }
 
-    if (scheduleState !== 'open') {
-      setStatus(scheduleState === 'after'
-        ? 'Голосование завершено — участки закрыты.'
-        : 'Голосование ещё не началось.', false);
+    if (votingState !== 'open') {
+      setStatus(STATE_TEXT[votingState].notice(), false);
       return;
     }
 

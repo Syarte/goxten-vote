@@ -665,6 +665,11 @@ img { max-width: 100%; }
 .btn:active { transform: translateY(1px); }
 .btn[disabled] { opacity: 0.5; cursor: not-allowed; transform: none; }
 
+/* участки закрыты: кнопка приглушена, но кликабельна — иначе председатель
+   ЦИК не сможет открыть свою панель */
+.btn.is-locked { opacity: 0.45; }
+.btn.is-locked:hover { opacity: 0.6; }
+
 .submit-row__note {
   margin: 0;
   flex: 1 1 220px;
