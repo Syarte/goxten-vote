@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Выборы мэра Goxten</title>
+<meta name="description" content="Голосование на выборах мэра страны Goxten — ролевой проект Minecraft-сервера.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<a class="skip-link" href="#ballot">Перейти к голосованию</a>
+
+<header class="banner">
+  <div class="wrap banner__inner">
+    <p class="eyebrow">Центральная избирательная комиссия · Goxten</p>
+    <h1 class="banner__title">Выборы мэра Goxten<span class="banner__dash">—</span><span class="banner__year">2026</span></h1>
+    <p class="banner__sub">Твой голос решает будущее страны</p>
+
+    <dl class="status">
+      <div class="status__item">
+        <dt>Статус</dt>
+        <dd id="status-state">Голосование открыто</dd>
+      </div>
+      <div class="status__item">
+        <dt>До закрытия участков</dt>
+        <dd id="status-countdown">—</dd>
+      </div>
+      <div class="status__item">
+        <dt>Партий в бюллетене</dt>
+        <dd id="status-count">—</dd>
+      </div>
+    </dl>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="section" id="parties" aria-labelledby="parties-title">
+    <div class="section__head">
+      <h2 class="section__title" id="parties-title">Партии и программы</h2>
+      <p class="section__note">Порядок карточек совпадает с номерами в бюллетене</p>
+    </div>
+    <div class="party-grid" id="party-grid"></div>
+  </section>
+
+  <section class="section" id="ballot" aria-labelledby="ballot-title">
+    <div class="section__head">
+      <h2 class="section__title" id="ballot-title">Бюллетень</h2>
+      <p class="section__note">Один гражданин — один голос</p>
+    </div>
+
+    <div class="ballot">
+      <p class="ballot__stamp">Избирательный бюллетень · Goxten · 2026</p>
+      <p class="ballot__notice" id="ballot-notice" hidden></p>
+
+      <form class="ballot__form" id="vote-form" novalidate autocomplete="off">
+
+        <div class="field-set" role="group" aria-labelledby="voter-legend">
+          <p class="field-set__legend" id="voter-legend">Данные избирателя</p>
+          <p class="field-set__hint">Указывайте игровые данные, как они записаны в паспорте Goxten.</p>
+
+          <div class="field-row">
+            <div class="field">
+              <label class="field__label" for="first-name">Имя</label>
+              <input class="field__input" type="text" id="first-name" name="firstName" maxlength="32"
+                     aria-describedby="first-name-error" placeholder="Например: Ларс">
+              <p class="field__error" id="first-name-error" hidden></p>
+            </div>
+
+            <div class="field">
+              <label class="field__label" for="last-name">Фамилия</label>
+              <input class="field__input" type="text" id="last-name" name="lastName" maxlength="32"
+                     aria-describedby="last-name-error" placeholder="Например: Бернленд">
+              <p class="field__error" id="last-name-error" hidden></p>
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field__label" for="middle-name">
+              Отчество <span class="field__optional">необязательно</span>
+            </label>
+            <input class="field__input" type="text" id="middle-name" name="middleName" maxlength="32"
+                   aria-describedby="middle-name-error" placeholder="Если есть в паспорте">
+            <p class="field__error" id="middle-name-error" hidden></p>
+          </div>
+
+          <div class="field field--passport">
+            <label class="field__label" for="passport">Игровой паспорт</label>
+            <input class="field__input field__input--mono" type="text" id="passport" name="passport"
+                   maxlength="32" spellcheck="false" autocapitalize="characters"
+                   aria-describedby="passport-hint passport-error" placeholder="GX-04812">
+            <p class="field__hint" id="passport-hint">Буквы, цифры и символы. Минимум 5 знаков. По этому номеру проверяется, что голос подан один раз.</p>
+            <p class="field__error" id="passport-error" hidden></p>
+          </div>
+        </div>
+
+        <div class="field-set" id="choice-set" role="radiogroup"
+             aria-labelledby="choice-legend" aria-describedby="choice-error">
+          <p class="field-set__legend" id="choice-legend">Выбор партии</p>
+          <p class="field-set__hint">Отметьте одну партию. Список синхронизирован с карточками выше.</p>
+          <div class="ballot-options" id="ballot-options"></div>
+          <p class="field__error" id="choice-error" hidden></p>
+
+          <div class="field">
+            <label class="field__label" for="reason">
+              Почему вы голосуете за эту партию <span class="field__optional">необязательно</span>
+            </label>
+            <textarea class="field__input field__textarea" id="reason" name="reason" rows="3"
+                      maxlength="300" placeholder="Пара слов для протокола ЦИК"></textarea>
+            <p class="field__hint"><span id="reason-count">0</span>/300</p>
+          </div>
+        </div>
+
+        <div class="honeypot" aria-hidden="true">
+          <label for="hp-field">Не заполняйте это поле</label>
+          <input type="text" id="hp-field" name="website" tabindex="-1" autocomplete="off">
+        </div>
+
+        <div class="submit-row">
+          <button class="btn" type="submit" id="submit-btn">Проголосовать</button>
+          <p class="submit-row__note">Отправляя бюллетень, вы подтверждаете, что голосуете за своего персонажа. Данные бюллетеня публикуются в Discord-канале ЦИК Goxten.</p>
+        </div>
+
+        <p class="form-status" id="form-status" role="alert" hidden></p>
+      </form>
+
+      <div class="receipt" id="receipt" hidden></div>
+      <div class="admin-panel" id="admin-panel" hidden></div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <p class="footer__deadline">
+      <span class="footer__deadline-label">Голосование завершается</span>
+      <span class="footer__deadline-value" id="deadline-text">—</span>
+    </p>
+    <p class="footer__disclaimer">
+      Данный сайт — часть ролевого проекта, посвящённого стране Goxten на Minecraft-сервере.
+      Все данные используются исключительно в игровых целях.
+    </p>
+    <p class="footer__meta">ЦИК Goxten · вымышленная организация игрового мира</p>
+  </div>
+</footer>
+
+<script src="script.js" defer></script>
+</body>
+</html>
